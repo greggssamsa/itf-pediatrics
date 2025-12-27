@@ -1,0 +1,1110 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Doz Hesaplayıcı (Antibiyotik/Antifungal/Antiviral)</title>
+  <style>
+    :root { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color-scheme: light; }
+    body { margin:0; background:#f6f7fb; color:#111; }
+    .wrap { max-width: 980px; margin: 22px auto; padding: 0 14px 28px; }
+    .card { background:#fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.08); padding: 16px; }
+    h1 { font-size: 18px; margin: 0 0 10px; }
+    .muted { color:#555; font-size: 13px; line-height: 1.35; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 780px){ .grid { grid-template-columns: 1fr; } }
+    label { display:block; font-size: 13px; color:#333; margin-bottom: 6px; }
+    input, button, select {
+      width: 100%; box-sizing:border-box; border:1px solid #d9deea; border-radius: 12px;
+      padding: 12px 12px; font-size: 15px; background:#fff;
+    }
+    input:focus, button:focus, select:focus { outline: 2px solid rgba(70,120,255,.35); border-color:#6c8cff; }
+    .row { display:flex; gap:10px; align-items: stretch; }
+    .row > * { flex:1; }
+    button { cursor:pointer; border: 0; background:#111; color:#fff; font-weight: 600; }
+    button.secondary { background:#fff; color:#111; border:1px solid #d9deea; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .pill { display:inline-flex; align-items:center; gap:8px; padding:8px 10px; border-radius: 999px;
+            background:#f1f3f9; border:1px solid #e4e7f2; font-size: 13px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .hr { height:1px; background:#edf0f7; margin: 12px 0; }
+    .out { white-space: pre-wrap; font-size: 14px; line-height: 1.35; }
+    .small { font-size: 12px; color:#555; }
+    .list { display:flex; flex-wrap: wrap; gap: 8px; }
+    .hint { background:#fff7d6; border:1px solid #ffe9a0; padding: 10px 12px; border-radius: 14px; }
+    .ok { color:#0a7a2f; }
+    .bad { color:#b00020; }
+    .warn { color:#8a5a00; }
+    .title2 { font-size: 15px; font-weight: 700; margin: 0 0 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Antibiyotik / Antifungal / Antiviral Doz Hesaplayıcı</h1>
+      <div class="muted">
+        Kilo ile <b>mg/doz</b> ve <b>mg/gün</b> hesaplar; <b>m²</b> gerekenlerde <b>boy</b> ister (Mosteller).
+        TMP-SMX (Bactrim) dozları <b>TMP bileşeni</b> üzerinden.
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="grid">
+        <div>
+          <label>Kilo (kg)</label>
+          <input id="weight" inputmode="decimal" placeholder="örn 14,5" />
+          <div class="small">Virgül veya nokta kabul eder.</div>
+        </div>
+        <div>
+          <label>Boy (cm) (m² dozlar için gerekebilir)</label>
+          <input id="height" inputmode="decimal" placeholder="örn 90" />
+          <div class="small">Boş bırakabilirsin; gerekince uyarır.</div>
+        </div>
+
+        <div style="grid-column: 1 / -1;">
+          <label>İlaç adı (tam/kısmi) veya kısaltma (alias)</label>
+          <div class="row">
+            <input id="drugQuery" placeholder="örn vanko / mero / fluko / piptazo / sefe / bactrim / seftri / amoksiklav / klaritro / tige ..." />
+            <button id="btnCalc">Hesapla</button>
+            <button class="secondary" id="btnClear" type="button">Temizle</button>
+          </div>
+          <div class="small">
+            Arama birden çok eşleşme bulursa listeden seçtirir. Kısaltmalar destekli (vanko, mero, fluko, teiko, metro, ami, asik, valgan, bactrim, seftri, amoksiklav, klaritro, tige…).
+          </div>
+        </div>
+
+        <div style="grid-column: 1 / -1;">
+          <div id="matchBox" class="hint" style="display:none;"></div>
+        </div>
+
+        <div style="grid-column: 1 / -1;">
+          <div class="title2">Çıktı</div>
+          <div id="output" class="out"></div>
+          <div class="small" style="margin-top:10px;">
+            Not: Bu çıktı renal/hepatik ayarlama ve TDM hedeflerini otomatik uygulamaz; klinik doğrulama şart.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* =============================
+   HELPERS
+============================= */
+
+function normalizeText(s){
+  if(!s) return "";
+  s = String(s).trim().toLowerCase();
+  const map = { "ı":"i","ş":"s","ğ":"g","ü":"u","ö":"o","ç":"c" };
+  s = s.replace(/[ışğüöç]/g, ch => map[ch] || ch);
+  s = s.replace(/\s+/g," ").trim();
+  return s;
+}
+
+function safeNumber(val){
+  const s = String(val ?? "").trim().replace(",", ".");
+  const v = Number(s);
+  return Number.isFinite(v) ? v : NaN;
+}
+
+function parseFrequencyToDosesPerDay(freq){
+  const f = normalizeText(freq).replace(/ /g,"");
+  if(f.startsWith("gunde")){
+    const num = (f.match(/\d+/g)||[]).join("");
+    return num ? Number(num) : null;
+  }
+  if(f === "od" || f === "q24h") return 1.0;
+  if(f.startsWith("q") && f.endsWith("h")){
+    const num = f.slice(1,-1);
+    if(/^\d+$/.test(num)){
+      const hours = Number(num);
+      if(hours > 0) return 24.0 / hours;
+    }
+  }
+  return null;
+}
+
+function mostellerBsaM2(weightKg, heightCm){
+  return Math.sqrt((heightCm * weightKg) / 3600.0);
+}
+
+function bsaWeightOnlyM2(weightKg){
+  return ((weightKg * 4.0) + 7.0) / (weightKg + 90.0);
+}
+
+function fmt(n, digits=2){
+  if(n === null || n === undefined) return "";
+  if(!Number.isFinite(n)) return "";
+  return n.toFixed(digits).replace(/\.00$/,"").replace(/(\.\d)0$/,"$1");
+}
+
+/* =============================
+   SPECTRUM DATABASE
+============================= */
+
+const SPECTRUM = {
+  "piperasilin tazobaktam": {
+    class: "Antibakteriyel (anti-psödomonal penisilin + beta-laktamaz inhibitörü)",
+    covers: [
+      "Gram (+): Streptococcus spp., Enterococcus faecalis",
+      "Gram (–): E. coli, Klebsiella, Enterobacter, Proteus",
+      "Pseudomonas aeruginosa",
+      "Anaeroblar (Bacteroides fragilis dahil)"
+    ],
+    not: ["MRSA", "ESBL (güvenilir değil)"],
+    pearls: ["Karma intraabdominal/aspirasyon + nozokomiyal GN riskinde sık kullanılır."]
+  },
+  "sefepim": {
+    class: "Antibakteriyel (4. kuşak sefalosporin)",
+    covers: [
+      "Gram (+): Streptococcus spp., MSSA",
+      "Gram (–): Enterobacteriaceae",
+      "Pseudomonas aeruginosa"
+    ],
+    not: ["Anaeroblar", "MRSA", "ESBL (güvenilir değil)"],
+    pearls: ["Anaerob şüphede metronidazol gibi ek gerekir."]
+  },
+  "seftazidim": {
+    class: "Antibakteriyel (3. kuşak anti-psödomonal sefalosporin)",
+    covers: [
+      "Gram (–) güçlü (Enterobacteriaceae)",
+      "Pseudomonas aeruginosa"
+    ],
+    not: ["Gram (+) zayıf", "Anaeroblar", "MRSA"],
+    pearls: ["Gram (+) kapsaması zayıf olduğu için monoterapide dikkat."]
+  },
+  "sefoperazon sulbaktam": {
+    class: "Antibakteriyel (3. kuşak sefalosporin + beta-laktamaz inhibitörü)",
+    covers: [
+      "Gram (+): Streptococcus spp., MSSA",
+      "Gram (–): Enterobacteriaceae",
+      "Anaeroblar (sulbaktam katkısı)"
+    ],
+    not: ["MRSA"],
+    pearls: ["Pseudomonas kapsaması merkeze göre değişken/orta kabul edilir."]
+  },
+  "meropenem": {
+    class: "Antibakteriyel (karbapenem)",
+    covers: [
+      "Gram (+): Streptococcus spp., MSSA",
+      "Gram (–): Enterobacteriaceae (ESBL dahil)",
+      "Pseudomonas aeruginosa",
+      "Anaeroblar"
+    ],
+    not: ["MRSA", "VRE"],
+    pearls: ["ESBL şüphesinde güçlü seçenek."]
+  },
+  "vankomisin": {
+    class: "Antibakteriyel (glikopeptid)",
+    covers: [
+      "Gram (+) bakteriler",
+      "MRSA",
+      "Penisiline dirençli Streptococcus spp.",
+      "Enterococcus spp. (bazı suşlar)"
+    ],
+    not: ["Gram (–)", "Anaeroblar"],
+    pearls: ["TDM (trough/AUC) ve nefrotoksisite açısından takip önemlidir."]
+  },
+  "teikoplanin": {
+    class: "Antibakteriyel (glikopeptid)",
+    covers: [
+      "Gram (+) bakteriler",
+      "MRSA",
+      "Enterococcus spp. (bazı suşlar)"
+    ],
+    not: ["Gram (–)", "Anaeroblar"],
+    pearls: ["Vankomisine benzer; pratikte bazı yerlerde daha kolay uygulanır."]
+  },
+  "amikasin": {
+    class: "Antibakteriyel (aminoglikozid)",
+    covers: [
+      "Gram (–) aeroblar (E. coli, Klebsiella vb.)",
+      "Pseudomonas aeruginosa"
+    ],
+    not: ["Anaeroblar", "Gram (+) için monoterapi"],
+    pearls: ["Genelde beta-laktam ile kombine; nefro/ototoksisite izlenir."]
+  },
+  "metronidazol": {
+    class: "Antibakteriyel/Antiprotozoal (nitroimidazol)",
+    covers: [
+      "Anaeroblar (Bacteroides, Clostridioides vb.)",
+      "Protozoonlar (Giardia, Entamoeba)"
+    ],
+    not: ["Aerob Gram (+)/(–)"],
+    pearls: ["Beyin absesi/intraabdominal anaerob şüphede sık eklenir."]
+  },
+  "eritromisin": {
+    class: "Antibakteriyel (makrolid)",
+    covers: [
+      "Gram (+): Streptococcus spp. (sınırlı)",
+      "Atipikler: Mycoplasma, Chlamydia, Legionella"
+    ],
+    not: ["Enterik Gram (–) güçlü değil", "Anaeroblar"],
+    pearls: ["Atipik pnömoni/pertussis gibi endikasyonlarda öne çıkar."]
+  },
+
+  /* ====== EKLENENLER ====== */
+
+  "seftriakson": {
+    class: "Antibakteriyel (3. kuşak sefalosporin)",
+    covers: [
+      "Gram (+): Streptococcus spp. (pnömokok dahil), MSSA (sınırlı)",
+      "Gram (–): Enterobacteriaceae (E. coli, Klebsiella vb.)",
+      "Neisseria spp. (meningokok/gonokok)",
+      "Anaerob: sınırlı (B. fragilis için güvenilir değil)"
+    ],
+    not: ["Pseudomonas aeruginosa", "Enterococcus", "MRSA"],
+    pearls: [
+      "Menenjitte yüksek doz (100 mg/kg/gün) şeması kullanılır.",
+      "Neonatta (≤28g) IV kalsiyum içeren solüsyonlarla aynı hatta/aynı zamanda verilmez (çekirdek ikterus/çökelme riski)."
+    ]
+  },
+
+  "amoksisilin klavulanat": {
+    class: "Antibakteriyel (aminopenisilin + beta-laktamaz inhibitörü)",
+    covers: [
+      "Gram (+): Streptococcus spp., MSSA (sınırlı), Enterococcus faecalis (amoksisilin etkisi)",
+      "Gram (–): H. influenzae (beta-laktamaz +), Moraxella catarrhalis, bazı Enterobacteriaceae (değişken)",
+      "Anaeroblar: ağız florası/aspirasyon spektrumunda katkı"
+    ],
+    not: ["MRSA", "Pseudomonas aeruginosa", "ESBL üreten GN (güvenilir değil)"],
+    pearls: [
+      "Yüksek doz (80–90 mg/kg/gün amoksisilin bileşeni) özellikle AOM/sinüzit/CAP’te dirençli pnömokok riskinde kullanılır.",
+      "Klavulanat yükü artınca GIS yan etki artar; uygun oranlı preparat seçimi önemli."
+    ]
+  },
+
+  "klaritromisin": {
+    class: "Antibakteriyel (makrolid)",
+    covers: [
+      "Atipikler: Mycoplasma, Chlamydia, Legionella",
+      "Gram (+): Streptococcus spp. (değişken), bazı MSSA (değişken)",
+      "H. pylori eradikasyon rejimlerinde rol"
+    ],
+    not: ["Pseudomonas aeruginosa", "Çoğu Enterobacteriaceae", "MRSA (güvenilir değil)"],
+    pearls: [
+      "CYP etkileşimleri (özellikle statin/antiaritmik vb.) ve QT uzaması açısından dikkat.",
+      "Doz: 7.5 mg/kg/doz q12h (maks 500 mg/doz) yaygın pediatrik şema."
+    ]
+  },
+
+  "tigesiklin": {
+    class: "Antibakteriyel (glisil-siklin; tetrasiklin türevi)",
+    covers: [
+      "Geniş: birçok Gram (+) (MRSA dahil), birçok Gram (–) (bazıları), anaeroblar",
+      "Atipikler: bazı türler"
+    ],
+    not: ["Pseudomonas aeruginosa", "Proteus/Providencia/Morganella (intrinsik)"],
+    pearls: [
+      "Pediatri: genelde ≥8 yaş; ciddi/çok ilaca dirençli enfeksiyonlarda 'salvage' seçenek.",
+      "Klinik başarısızlık uyarıları olan endikasyonlar (özellikle kritik hastada) nedeniyle ID/klinik mikrobiyoloji ile karar önerilir."
+    ]
+  },
+
+  /* ====== DEVAM ====== */
+
+  "flukonazol": {
+    class: "Antifungal (azol)",
+    covers: ["Candida albicans", "Cryptococcus neoformans"],
+    not: ["Candida krusei", "Küfler (Aspergillus vb.)"],
+    pearls: ["Candida glabrata duyarlılığı değişken olabilir (yerel veri önemli)."]
+  },
+  "amfoterisin b (lipozomal)": {
+    class: "Antifungal (polyen) - lipozomal",
+    covers: ["Geniş: Candida", "Aspergillus", "Cryptococcus", "Mucorales"],
+    not: [],
+    pearls: ["Lipozomal form nefrotoksisiteyi azaltır; yine de elektrolit izlem gerekir."]
+  },
+  "caspofungin": {
+    class: "Antifungal (ekinokandin)",
+    covers: ["Candida (krusei dahil)", "Aspergillus (fungistatik etki)"],
+    not: ["Cryptococcus", "Mucorales"],
+    pearls: ["Kandidemide güçlü; küf şüphesinde vorikonazol/amfo ile seçilir."]
+  },
+  "mikafungin": {
+    class: "Antifungal (ekinokandin)",
+    covers: ["Candida", "Aspergillus (fungistatik)"],
+    not: ["Cryptococcus", "Mucorales"],
+    pearls: ["Neonatal/hematoloji pratiğinde kandidemi/profilakside sık kullanılır."]
+  },
+  "vorikonazol": {
+    class: "Antifungal (azol)",
+    covers: ["Aspergillus (ilk tercih kabul edilir)", "Candida spp."],
+    not: ["Mucorales"],
+    pearls: ["İlaç etkileşimi/TDM ve görsel yan etkiler açısından dikkat."]
+  },
+  "asiklovir": {
+    class: "Antiviral",
+    covers: ["HSV-1, HSV-2", "VZV"],
+    not: ["CMV"],
+    pearls: ["IV kullanımda yeterli hidrasyon ve böbrek fonksiyonu izlenir."]
+  },
+  "gansiklovir": {
+    class: "Antiviral",
+    covers: ["CMV", "HSV, VZV"],
+    not: [],
+    pearls: ["Kemik iliği supresyonu (nötropeni/trombositopeni) önemli yan etki."]
+  },
+  "valgansiklovir": {
+    class: "Antiviral (oral prodrug)",
+    covers: ["CMV (oral)", "HSV, VZV"],
+    not: [],
+    pearls: ["Hematolojik toksisite izlenir; oral kullanım avantajı."]
+  },
+  "bactrim (sulfametoksazol/trimetoprim)": {
+    class: "Antibakteriyel (TMP-SMX, ko-trimoksazol) — dozlar TMP bileşeni üzerinden hesaplanır",
+    covers: [
+      "Pneumocystis jirovecii (PJP) profilaksi/tedavi",
+      "Stenotrophomonas maltophilia, Nocardia (klinikte önemli)",
+      "Bazı CA-MRSA, bazı GN (özellikle üriner)"
+    ],
+    not: ["Pseudomonas", "Anaeroblar (klasik)"],
+    pearls: ["Dozları 'TMP mg' üzerinden düşün; hematolojik yan etkiler ve K+ artışı görülebilir."]
+  }
+};
+
+function spectrumLookup(name){
+  const key = normalizeText(name);
+  if(SPECTRUM[key]) return SPECTRUM[key];
+  const key2 = key.replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim();
+  return SPECTRUM[key2] || null;
+}
+
+function spectrumBadges(info){
+  const covers = (info?.covers || []).join(" | ");
+  const nots = (info?.not || []).join(" | ");
+  const hay = normalizeText(covers);
+  const nay = normalizeText(nots);
+
+  function badge(keyword){
+    const k = normalizeText(keyword);
+    if(k && hay.includes(k)) return "✔";
+    if(k && nay.includes(k)) return "✖";
+    return "?";
+  }
+
+  return {
+    Pseudomonas: badge("pseudomonas"),
+    MRSA: badge("mrsa"),
+    Anaerob: badge("anaerob"),
+    CMV: badge("cmv"),
+    Aspergillus: badge("aspergillus")
+  };
+}
+
+/* =============================
+   CORE MODELS
+============================= */
+
+class DoseRule {
+  constructor({
+    indication, route, frequency,
+    mg_per_kg_per_day=null, mg_per_kg_per_dose=null,
+    mg_per_m2_per_day=null, mg_per_m2_per_dose=null,
+    fixed_mg_per_day=null, fixed_mg_per_dose=null, /* <-- EKLENDİ */
+    max_mg_per_day=null, max_mg_per_dose=null, notes=""
+  }){
+    this.indication = indication;
+    this.route = route;
+    this.frequency = frequency;
+
+    this.mg_per_kg_per_day = mg_per_kg_per_day;
+    this.mg_per_kg_per_dose = mg_per_kg_per_dose;
+    this.mg_per_m2_per_day = mg_per_m2_per_day;
+    this.mg_per_m2_per_dose = mg_per_m2_per_dose;
+
+    this.fixed_mg_per_day = fixed_mg_per_day;
+    this.fixed_mg_per_dose = fixed_mg_per_dose;
+
+    this.max_mg_per_day = max_mg_per_day;
+    this.max_mg_per_dose = max_mg_per_dose;
+    this.notes = notes || "";
+  }
+  dosesPerDay(){ return parseFrequencyToDosesPerDay(this.frequency); }
+  needsBsa(){ return (this.mg_per_m2_per_day !== null) || (this.mg_per_m2_per_dose !== null); }
+  describe(){
+    const parts = [];
+    if(this.mg_per_kg_per_dose !== null) parts.push(`${this.mg_per_kg_per_dose} mg/kg/doz`);
+    if(this.mg_per_kg_per_day !== null) parts.push(`${this.mg_per_kg_per_day} mg/kg/gün`);
+    if(this.mg_per_m2_per_dose !== null) parts.push(`${this.mg_per_m2_per_dose} mg/m²/doz`);
+    if(this.mg_per_m2_per_day !== null) parts.push(`${this.mg_per_m2_per_day} mg/m²/gün`);
+    if(this.fixed_mg_per_dose !== null) parts.push(`${this.fixed_mg_per_dose} mg/doz (sabit)`);
+    if(this.fixed_mg_per_day !== null) parts.push(`${this.fixed_mg_per_day} mg/gün (sabit)`);
+
+    if(parts.length === 0) parts.push("Doz tanımlı değil");
+
+    let maxp = "";
+    if(this.max_mg_per_dose !== null && this.max_mg_per_day !== null){
+      maxp = ` (maks ${this.max_mg_per_dose} mg/doz; maks ${this.max_mg_per_day} mg/gün)`;
+    } else if(this.max_mg_per_dose !== null){
+      maxp = ` (maks ${this.max_mg_per_dose} mg/doz)`;
+    } else if(this.max_mg_per_day !== null){
+      maxp = ` (maks ${this.max_mg_per_day} mg/gün)`;
+    }
+    const note = this.notes ? ` | ${this.notes}` : "";
+    return `${parts.join(" / ")}${maxp}, ${this.route}, ${this.frequency}${note}`;
+  }
+}
+
+class Drug {
+  constructor(name){
+    this.name = name;
+    this.rules = [];
+  }
+  addRule(rule){ this.rules.push(rule); }
+  rulesByIndication(){
+    const d = {};
+    for(const r of this.rules){
+      const key = normalizeText(r.indication);
+      if(!d[key]) d[key] = [];
+      d[key].push(r);
+    }
+    return d;
+  }
+  hasLoadingMaintenance(){
+    const m = this.rulesByIndication();
+    return (m["yukleme"] && m["idame"]);
+  }
+}
+
+/* =============================
+   REGISTRY + ALIASES
+============================= */
+
+const REGISTRY = new Map(); // key: lower original name
+function register(drug){
+  REGISTRY.set(String(drug.name).trim().toLowerCase(), drug);
+}
+
+const ALIASES = {
+  "piptazo": "piperasilin tazobaktam",
+  "tazo": "piperasilin tazobaktam",
+  "pip/tazo": "piperasilin tazobaktam",
+  "pip": "piperasilin tazobaktam",
+
+  "mero": "meropenem",
+  "meropenem": "meropenem",
+
+  "vanko": "vankomisin",
+  "vank": "vankomisin",
+  "vanc": "vankomisin",
+
+  "teiko": "teikoplanin",
+  "teico": "teikoplanin",
+  "tpk": "teikoplanin",
+
+  "ami": "amikasin",
+  "amik": "amikasin",
+
+  "metro": "metronidazol",
+  "mtz": "metronidazol",
+
+  "sefe": "sefepim",
+  "cefep": "sefepim",
+
+  "sefta": "seftazidim",
+  "cefta": "seftazidim",
+
+  "cefop": "sefoperazon sulbaktam",
+  "sulper": "sefoperazon sulbaktam",
+
+  "fluko": "flukonazol",
+  "fluc": "flukonazol",
+
+  "amfo": "amfoterisin b (lipozomal)",
+  "l-amfo": "amfoterisin b (lipozomal)",
+
+  "caspo": "caspofungin",
+  "mika": "mikafungin",
+  "vori": "vorikonazol",
+
+  "asik": "asiklovir",
+  "acy": "asiklovir",
+
+  "gansik": "gansiklovir",
+  "ganc": "gansiklovir",
+
+  "valgan": "valgansiklovir",
+  "valg": "valgansiklovir",
+
+  "bactrim": "bactrim (sulfametoksazol/trimetoprim)",
+  "septra": "bactrim (sulfametoksazol/trimetoprim)",
+  "cotrim": "bactrim (sulfametoksazol/trimetoprim)",
+  "co-trim": "bactrim (sulfametoksazol/trimetoprim)",
+  "kotri": "bactrim (sulfametoksazol/trimetoprim)",
+  "tmp-smx": "bactrim (sulfametoksazol/trimetoprim)",
+  "tmpsmx": "bactrim (sulfametoksazol/trimetoprim)",
+  "sulfatrim": "bactrim (sulfametoksazol/trimetoprim)",
+  "trimetoprim sulfametoksazol": "bactrim (sulfametoksazol/trimetoprim)",
+
+  /* ====== EKLENENLER ====== */
+  "seftri": "seftriakson",
+  "ceftri": "seftriakson",
+  "ceftriaxone": "seftriakson",
+  "seftriakson": "seftriakson",
+
+  "amoksiklav": "amoksisilin klavulanat",
+  "augmentin": "amoksisilin klavulanat",
+  "klamoks": "amoksisilin klavulanat",
+  "amoxclav": "amoksisilin klavulanat",
+  "amoxiclav": "amoksisilin klavulanat",
+  "amoksisilin/klavulanat": "amoksisilin klavulanat",
+  "amoksisilin klavulanat": "amoksisilin klavulanat",
+
+  "klaritro": "klaritromisin",
+  "clarithro": "klaritromisin",
+  "clarithromycin": "klaritromisin",
+  "klaritromisin": "klaritromisin",
+
+  "tige": "tigesiklin",
+  "tigecycline": "tigesiklin",
+  "tygacil": "tigesiklin",
+  "tigesiklin": "tigesiklin"
+};
+
+function resolveAlias(query){
+  const q = normalizeText(query);
+  if(!q) return null;
+  const canonical = ALIASES[q];
+  if(!canonical) return null;
+  for(const d of REGISTRY.values()){
+    if(normalizeText(d.name) === normalizeText(canonical)) return d;
+  }
+  return null;
+}
+
+function searchDrugs(query){
+  const q = normalizeText(query);
+  if(!q) return [];
+  const hits = [];
+  for(const d of REGISTRY.values()){
+    const nameNorm = normalizeText(d.name);
+    if(nameNorm.includes(q)) hits.push(d);
+  }
+  hits.sort((a,b)=> normalizeText(a.name).localeCompare(normalizeText(b.name)));
+  return hits;
+}
+
+// difflib benzeri: Levenshtein + en yakın N öneri
+function levenshtein(a,b){
+  a = normalizeText(a); b = normalizeText(b);
+  const m = a.length, n = b.length;
+  const dp = Array.from({length:m+1},()=>Array(n+1).fill(0));
+  for(let i=0;i<=m;i++) dp[i][0]=i;
+  for(let j=0;j<=n;j++) dp[0][j]=j;
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      const cost = a[i-1]===b[j-1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
+    }
+  }
+  return dp[m][n];
+}
+function similarity(a,b){
+  a = normalizeText(a); b = normalizeText(b);
+  if(!a && !b) return 1;
+  const dist = levenshtein(a,b);
+  const maxLen = Math.max(a.length, b.length) || 1;
+  return 1 - (dist / maxLen);
+}
+function suggestDrugs(query, n=5, cutoff=0.55){
+  const q = normalizeText(query);
+  if(!q) return [];
+  const names = Array.from(REGISTRY.values()).map(d=>d.name);
+  const scored = names.map(name=>({name, score: similarity(q, name)}))
+                      .filter(x=>x.score >= cutoff)
+                      .sort((x,y)=> y.score - x.score)
+                      .slice(0,n);
+  return scored.map(x=>x.name);
+}
+
+/* =============================
+   CALCULATIONS
+============================= */
+
+function calcMgPerDose(rule, pt){
+  const dpd = rule.dosesPerDay();
+
+  /* SABİT mg/doz */
+  if(rule.fixed_mg_per_dose !== null){
+    let mg = rule.fixed_mg_per_dose;
+    let detail = `${rule.fixed_mg_per_dose} mg/doz (sabit)`;
+    if(rule.max_mg_per_dose !== null && mg > rule.max_mg_per_dose){
+      detail += ` → maks ${rule.max_mg_per_dose} mg/doz uygulandı`;
+      mg = rule.max_mg_per_dose;
+    }
+    return { mgDose: mg, detail };
+  }
+
+  if(rule.mg_per_kg_per_dose !== null){
+    let mg = rule.mg_per_kg_per_dose * pt.weightKg;
+    let detail = `${rule.mg_per_kg_per_dose} mg/kg/doz × ${pt.weightKg} kg = ${fmt(mg,2)} mg/doz`;
+    if(rule.max_mg_per_dose !== null && mg > rule.max_mg_per_dose){
+      detail += ` → maks ${rule.max_mg_per_dose} mg/doz uygulandı`;
+      mg = rule.max_mg_per_dose;
+    }
+    return { mgDose: mg, detail };
+  }
+
+  if(rule.mg_per_m2_per_dose !== null){
+    const bsa = mostellerBsaM2(pt.weightKg, pt.heightCm);
+    let mg = rule.mg_per_m2_per_dose * bsa;
+    let detail = `${rule.mg_per_m2_per_dose} mg/m²/doz × ${fmt(bsa,3)} m² = ${fmt(mg,2)} mg/doz`;
+    if(rule.max_mg_per_dose !== null && mg > rule.max_mg_per_dose){
+      detail += ` → maks ${rule.max_mg_per_dose} mg/doz uygulandı`;
+      mg = rule.max_mg_per_dose;
+    }
+    return { mgDose: mg, detail };
+  }
+
+  if(rule.fixed_mg_per_day !== null){
+    if(dpd === null || dpd <= 0) return { mgDose: null, detail: `Sıklık (${rule.frequency}) doz/gün'e çevrilemedi; mg/doz hesaplanamadı.` };
+    const rawMgDay = rule.fixed_mg_per_day;
+    let mgDay = rawMgDay;
+    if(rule.max_mg_per_day !== null && mgDay > rule.max_mg_per_day) mgDay = rule.max_mg_per_day;
+    let mgDose = mgDay / dpd;
+    let detail = `${rawMgDay} mg/gün (sabit)`;
+    if(mgDay !== rawMgDay) detail += ` → maks ${mgDay} mg/gün'e kısıldı`;
+    detail += `; ${dpd} doz/gün → ${fmt(mgDose,2)} mg/doz`;
+    if(rule.max_mg_per_dose !== null && mgDose > rule.max_mg_per_dose){
+      detail += ` → maks ${rule.max_mg_per_dose} mg/doz uygulandı`;
+      mgDose = rule.max_mg_per_dose;
+    }
+    return { mgDose, detail };
+  }
+
+  if(rule.mg_per_kg_per_day !== null){
+    if(dpd === null || dpd <= 0) return { mgDose: null, detail: `Sıklık (${rule.frequency}) doz/gün'e çevrilemedi; mg/doz hesaplanamadı.` };
+    let mgDay = rule.mg_per_kg_per_day * pt.weightKg;
+    const rawMgDay = mgDay;
+    if(rule.max_mg_per_day !== null && mgDay > rule.max_mg_per_day) mgDay = rule.max_mg_per_day;
+    let mgDose = mgDay / dpd;
+    let detail = `${rule.mg_per_kg_per_day} mg/kg/gün × ${pt.weightKg} kg = ${fmt(rawMgDay,2)} mg/gün`;
+    if(mgDay !== rawMgDay) detail += ` → maks ${mgDay} mg/gün'e kısıldı`;
+    detail += `; ${dpd} doz/gün → ${fmt(mgDose,2)} mg/doz`;
+    if(rule.max_mg_per_dose !== null && mgDose > rule.max_mg_per_dose){
+      detail += ` → maks ${rule.max_mg_per_dose} mg/doz uygulandı`;
+      mgDose = rule.max_mg_per_dose;
+    }
+    return { mgDose, detail };
+  }
+
+  if(rule.mg_per_m2_per_day !== null){
+    if(dpd === null || dpd <= 0) return { mgDose: null, detail: `Sıklık (${rule.frequency}) doz/gün'e çevrilemedi; mg/doz hesaplanamadı.` };
+    const bsa = mostellerBsaM2(pt.weightKg, pt.heightCm);
+    let mgDay = rule.mg_per_m2_per_day * bsa;
+    const rawMgDay = mgDay;
+    if(rule.max_mg_per_day !== null && mgDay > rule.max_mg_per_day) mgDay = rule.max_mg_per_day;
+    let mgDose = mgDay / dpd;
+    let detail = `${rule.mg_per_m2_per_day} mg/m²/gün × ${fmt(bsa,3)} m² = ${fmt(rawMgDay,2)} mg/gün`;
+    if(mgDay !== rawMgDay) detail += ` → maks ${mgDay} mg/gün'e kısıldı`;
+    detail += `; ${dpd} doz/gün → ${fmt(mgDose,2)} mg/doz`;
+    if(rule.max_mg_per_dose !== null && mgDose > rule.max_mg_per_dose){
+      detail += ` → maks ${rule.max_mg_per_dose} mg/doz uygulandı`;
+      mgDose = rule.max_mg_per_dose;
+    }
+    return { mgDose, detail };
+  }
+
+  return { mgDose: null, detail: "Kuralda hesaplanabilir doz alanı yok." };
+}
+
+function calcMgPerDay(rule, pt, mgDose){
+  const dpd = rule.dosesPerDay();
+  if(dpd === null || dpd <= 0) return { mgDay: null, detail: `Sıklık (${rule.frequency}) doz/gün'e çevrilemedi; mg/gün hesaplanamadı.` };
+
+  if(rule.fixed_mg_per_day !== null){
+    let mgDay = rule.fixed_mg_per_day;
+    if(rule.max_mg_per_day !== null && mgDay > rule.max_mg_per_day) mgDay = rule.max_mg_per_day;
+    return { mgDay, detail: "Sabit mg/gün üzerinden hesaplandı" };
+  }
+
+  if(rule.mg_per_kg_per_day !== null){
+    let mgDay = rule.mg_per_kg_per_day * pt.weightKg;
+    if(rule.max_mg_per_day !== null && mgDay > rule.max_mg_per_day) mgDay = rule.max_mg_per_day;
+    return { mgDay, detail: "mg/kg/gün üzerinden hesaplandı" };
+  }
+
+  if(rule.mg_per_m2_per_day !== null){
+    const bsa = mostellerBsaM2(pt.weightKg, pt.heightCm);
+    let mgDay = rule.mg_per_m2_per_day * bsa;
+    if(rule.max_mg_per_day !== null && mgDay > rule.max_mg_per_day) mgDay = rule.max_mg_per_day;
+    return { mgDay, detail: "mg/m²/gün üzerinden hesaplandı" };
+  }
+
+  if(mgDose !== null){
+    let mgDay = mgDose * dpd;
+    if(rule.max_mg_per_day !== null && mgDay > rule.max_mg_per_day) mgDay = rule.max_mg_per_day;
+    return { mgDay, detail: "mg/doz × doz/gün ile hesaplandı" };
+  }
+
+  return { mgDay: null, detail: "mg/gün hesaplanamadı." };
+}
+
+function renderDrugCalculation(drug, pt){
+  let out = "";
+  out += "======================================================================\n";
+  out += `İLAÇ: ${drug.name}\n`;
+  out += "======================================================================\n";
+  const bsaW = bsaWeightOnlyM2(pt.weightKg);
+  out += `BSA/VYA (kilo ile) = [(${pt.weightKg}*4)+7]/(${pt.weightKg}+90) = ${fmt(bsaW,3)} m²\n\n`;
+
+  const spec = spectrumLookup(drug.name);
+  if(spec){
+    out += "ETKİ SPEKTRUMU:\n";
+    if(spec.class) out += `  - Sınıf: ${spec.class}\n`;
+    if((spec.covers||[]).length){
+      out += "  - Kapsar:\n";
+      for(const c of spec.covers) out += `      • ${c}\n`;
+    }
+    if((spec.not||[]).length){
+      out += "  - Kapsamaz/uyarı:\n";
+      for(const n of spec.not) out += `      • ${n}\n`;
+    }
+    if((spec.pearls||[]).length){
+      out += "  - Klinik not:\n";
+      for(const p of spec.pearls) out += `      • ${p}\n`;
+    }
+    const badges = spectrumBadges(spec);
+    out += `ROZET: Pseudomonas=${badges.Pseudomonas} | MRSA=${badges.MRSA} | Anaerob=${badges.Anaerob} | CMV=${badges.CMV} | Aspergillus=${badges.Aspergillus}\n`;
+    out += "\n";
+  }
+
+  const indMap = drug.rulesByIndication();
+
+  function renderInd(titleKey, title){
+    const rules = indMap[titleKey] || [];
+    if(!rules.length) return;
+    out += `${title}:\n`;
+    for(const r of rules){
+      out += `  - Kural: ${r.describe()}\n`;
+      if(r.needsBsa() && (!Number.isFinite(pt.heightCm))){
+        out += `    → Hata: Bu kural m² üzerinden. Boy (cm) girmen gerekiyor.\n`;
+        continue;
+      }
+      const {mgDose, detail} = calcMgPerDose(r, pt);
+      if(mgDose === null){
+        out += `    → Hesap: ${detail}\n`;
+        continue;
+      }
+      const dpd = r.dosesPerDay();
+      const {mgDay, detail: dayDetail} = calcMgPerDay(r, pt, mgDose);
+      out += `    → doz/gün: ${dpd !== null ? dpd : "?"}\n`;
+      out += `    → mg/doz: ${fmt(mgDose,2)} mg\n`;
+      if(mgDay !== null) out += `    → mg/gün: ${fmt(mgDay,2)} mg/gün\n`;
+      out += `    → Hesap: ${detail} | ${dayDetail}\n`;
+    }
+    out += "\n";
+  }
+
+  if(drug.hasLoadingMaintenance()){
+    renderInd("yukleme", "YÜKLEME");
+    renderInd("idame", "İDAME");
+  }
+
+  const otherKeys = Object.keys(indMap).filter(k => k !== "yukleme" && k !== "idame");
+  otherKeys.sort((a,b)=>{
+    const ax = (a === "genel") ? 0 : 1;
+    const bx = (b === "genel") ? 0 : 1;
+    if(ax !== bx) return ax - bx;
+    return a.localeCompare(b);
+  });
+
+  for(const k of otherKeys){
+    renderInd(k, k.toUpperCase());
+  }
+
+  out += "Not: Bu çıktı renal/hepatik ayarlama ve TDM hedeflerini otomatik uygulamaz; klinik doğrulama şart.\n";
+  out += "======================================================================\n";
+  return out;
+}
+
+/* =============================
+   DRUG LIST
+============================= */
+
+(function buildRegistry(){
+  const piptazo = new Drug("Piperasilin Tazobaktam");
+  piptazo.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 4", mg_per_kg_per_day:300, max_mg_per_day:18000}));
+  register(piptazo);
+
+  const cefepime = new Drug("Sefepim");
+  cefepime.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 3", mg_per_kg_per_day:150, max_mg_per_day:4000}));
+  register(cefepime);
+
+  const ceftazidime = new Drug("Seftazidim");
+  ceftazidime.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 3", mg_per_kg_per_day:150, max_mg_per_day:6000}));
+  register(ceftazidime);
+
+  const cefoper = new Drug("Sefoperazon Sulbaktam");
+  cefoper.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 3", mg_per_kg_per_day:150, max_mg_per_day:4000}));
+  register(cefoper);
+
+  const meropenem = new Drug("Meropenem");
+  meropenem.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 3", mg_per_kg_per_day:120, max_mg_per_day:6000}));
+  register(meropenem);
+
+  const vanko = new Drug("Vankomisin");
+  vanko.addRule(new DoseRule({indication:"yukleme", route:"IV", frequency:"od", mg_per_kg_per_dose:20, max_mg_per_dose:2000, notes:"Ağır enfeksiyonlarda yükleme; tek doz"}));
+  vanko.addRule(new DoseRule({indication:"idame", route:"IV", frequency:"q6h", mg_per_kg_per_dose:15, max_mg_per_dose:1000, max_mg_per_day:4000, notes:"TDM önerilir (trough/AUC hedefe göre)"}));
+  vanko.addRule(new DoseRule({indication:"idame", route:"IV", frequency:"q8h", mg_per_kg_per_dose:15, max_mg_per_dose:1000, max_mg_per_day:4000, notes:"Alternatif aralık; TDM önerilir"}));
+  register(vanko);
+
+  const teiko = new Drug("Teikoplanin");
+  teiko.addRule(new DoseRule({indication:"yukleme", route:"IV", frequency:"q12h", mg_per_kg_per_dose:10, max_mg_per_dose:400, notes:"İlk 3 doz (1.,2.,3. doz) 12 saat arayla"}));
+  teiko.addRule(new DoseRule({indication:"idame", route:"IV", frequency:"q24h", mg_per_kg_per_dose:10, max_mg_per_dose:400, notes:"4. doz ve sonrası 24 saat arayla"}));
+  register(teiko);
+
+  const amik = new Drug("Amikasin");
+  amik.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 2", mg_per_kg_per_day:20, max_mg_per_day:1500}));
+  register(amik);
+
+  const metro = new Drug("Metronidazol");
+  metro.addRule(new DoseRule({indication:"genel", route:"IV/PO", frequency:"günde 3", mg_per_kg_per_day:30, max_mg_per_day:2000}));
+  register(metro);
+
+  const eritro = new Drug("Eritromisin");
+  eritro.addRule(new DoseRule({indication:"genel", route:"IV/PO", frequency:"q6h", mg_per_kg_per_day:30, max_mg_per_dose:500, max_mg_per_day:4000, notes:"30–50 mg/kg/gün aralığının alt sınırı"}));
+  eritro.addRule(new DoseRule({indication:"genel", route:"IV/PO", frequency:"q6h", mg_per_kg_per_day:50, max_mg_per_dose:500, max_mg_per_day:4000, notes:"30–50 mg/kg/gün aralığının üst sınırı"}));
+  register(eritro);
+
+  /* =============================
+     EKLENEN: SEFTRİAKSON
+     - Genel: 50–75 mg/kg/gün q24h (maks 2 g/gün) (pratik)
+     - Menenjit: 100 mg/kg/gün q12h (maks 4 g/gün)
+  ============================= */
+  const ceftri = new Drug("Seftriakson");
+  ceftri.addRule(new DoseRule({indication:"dusuk_doz", route:"IV/IM", frequency:"od", mg_per_kg_per_day:50, max_mg_per_day:2000, notes:"Genel/orta enf.; pratik şema"}));
+  ceftri.addRule(new DoseRule({indication:"yuksek_doz", route:"IV/IM", frequency:"od", mg_per_kg_per_day:75, max_mg_per_day:2000, notes:"Genel/orta-ağır; maks genelde 2 g/gün"}));
+  ceftri.addRule(new DoseRule({indication:"menenjit", route:"IV", frequency:"q12h", mg_per_kg_per_day:100, max_mg_per_day:4000, notes:"Menenjit/pnömokok menenjiti şüphesi; 100 mg/kg/gün ÷ q12h"}));
+  register(ceftri);
+
+  /* =============================
+     EKLENEN: AMOKSİSİLİN/KLAVULANAT
+     Not: mg/kg/gün 'AMOKSİSİLİN BİLEŞENİ' üzerinden düşün.
+     - Standart: 45 mg/kg/gün (BID)
+     - Yüksek: 90 mg/kg/gün (BID)
+     Maks pratik: 875 mg amoksisilin/doz (tablet/süsp formuna göre değişebilir)
+  ============================= */
+  const amoxclav = new Drug("Amoksisilin Klavulanat");
+  amoxclav.addRule(new DoseRule({
+    indication:"dusuk_doz", route:"PO", frequency:"günde 2",
+    mg_per_kg_per_day:45, max_mg_per_dose:875,
+    notes:"Amoksisilin bileşeni: standart doz (ör. hafif-orta AOM/sinüzit/CAP). Klavulanat yükü preparata göre değişir."
+  }));
+  amoxclav.addRule(new DoseRule({
+    indication:"yuksek_doz", route:"PO", frequency:"günde 2",
+    mg_per_kg_per_day:90, max_mg_per_dose:875,
+    notes:"Amoksisilin bileşeni: yüksek doz (dirençli pnömokok riski/AOM/sinüzit/CAP). Uygun oranlı preparat seç."
+  }));
+  register(amoxclav);
+
+  /* =============================
+     EKLENEN: KLARİTROMİSİN
+     Standart pediatri: 7.5 mg/kg/doz q12h (maks 500 mg/doz)
+  ============================= */
+  const clar = new Drug("Klaritromisin");
+  clar.addRule(new DoseRule({
+    indication:"genel", route:"PO", frequency:"q12h",
+    mg_per_kg_per_dose:7.5, max_mg_per_dose:500,
+    notes:"Atipik pnömoni/pertussis/H. pylori rejimleri vb. (QT/etkileşim dikkat)."
+  }));
+  clar.addRule(new DoseRule({
+    indication:"pertussis", route:"PO", frequency:"q12h",
+    mg_per_kg_per_dose:7.5, max_mg_per_dose:500,
+    notes:"Genelde 7 gün; ulusal/yerel rehbere göre."
+  }));
+  register(clar);
+
+  const fluko = new Drug("Flukonazol");
+  fluko.addRule(new DoseRule({indication:"tedavi", route:"IV/PO", frequency:"od", mg_per_kg_per_day:12}));
+  fluko.addRule(new DoseRule({indication:"profilaksi", route:"IV/PO", frequency:"od", mg_per_kg_per_day:6}));
+  register(fluko);
+
+  const amfo = new Drug("Amfoterisin B (Lipozomal)");
+  amfo.addRule(new DoseRule({indication:"tedavi", route:"IV", frequency:"od", mg_per_kg_per_day:4}));
+  amfo.addRule(new DoseRule({indication:"profilaksi", route:"IV", frequency:"od", mg_per_kg_per_day:1, notes:"Haftada 3/7 gün"}));
+  register(amfo);
+
+  const caspo = new Drug("Caspofungin");
+  caspo.addRule(new DoseRule({indication:"yukleme", route:"IV", frequency:"od", mg_per_m2_per_day:70, notes:"İlk gün"}));
+  caspo.addRule(new DoseRule({indication:"idame", route:"IV", frequency:"od", mg_per_m2_per_day:50, notes:"2. gün ve sonrası"}));
+  register(caspo);
+
+  const mika = new Drug("Mikafungin");
+  mika.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"od", mg_per_kg_per_day:3}));
+  register(mika);
+
+  const vori = new Drug("Vorikonazol");
+  vori.addRule(new DoseRule({indication:"genel", route:"IV/PO", frequency:"günde 2", mg_per_kg_per_day:18}));
+  register(vori);
+
+  const asik = new Drug("Asiklovir");
+  asik.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 3", mg_per_m2_per_day:1500}));
+  register(asik);
+
+  const gansik = new Drug("Gansiklovir");
+  gansik.addRule(new DoseRule({indication:"genel", route:"IV", frequency:"günde 2", mg_per_kg_per_day:10}));
+  register(gansik);
+
+  const valgan = new Drug("Valgansiklovir");
+  valgan.addRule(new DoseRule({indication:"genel", route:"PO", frequency:"günde 2", mg_per_kg_per_day:32, max_mg_per_dose:450}));
+  register(valgan);
+
+  /* =============================
+     EKLENEN: TİGESİKLİN
+     - 8–11 yaş: 1.2 mg/kg/doz IV q12h (maks 50 mg/doz)
+     - ≥12 yaş: 50 mg IV q12h (sabit)
+     Not: Yaş girdisi yok → iki şemayı da listeliyoruz.
+  ============================= */
+  const tige = new Drug("Tigesiklin");
+  tige.addRule(new DoseRule({
+    indication:"8-11y", route:"IV", frequency:"q12h",
+    mg_per_kg_per_dose:1.2, max_mg_per_dose:50,
+    notes:"Genelde ≥8 yaş. Ciddi/MDR enfeksiyonlarda ID ile."
+  }));
+  tige.addRule(new DoseRule({
+    indication:">=12y", route:"IV", frequency:"q12h",
+    fixed_mg_per_dose:50,
+    notes:"Adölesan şema (sabit 50 mg q12h). Yaşa göre klinik doğrulama şart."
+  }));
+  register(tige);
+
+  const bactrim = new Drug("Bactrim (Sulfametoksazol/Trimetoprim)");
+  bactrim.addRule(new DoseRule({
+    indication:"tedavi", route:"PO/IV", frequency:"günde 2",
+    mg_per_kg_per_day:8, max_mg_per_day:320,
+    notes:"TMP bileşeni üzerinden: tipik 8 mg TMP/kg/gün (SMX 40 mg/kg/gün) q12h"
+  }));
+  bactrim.addRule(new DoseRule({
+    indication:"pjp_tedavi", route:"PO/IV", frequency:"q6h",
+    mg_per_kg_per_day:15, max_mg_per_day:960,
+    notes:"TMP bileşeni: PJP tedavi yüksek doz; klinik protokole göre 15–20 mg TMP/kg/gün (SMX 75–100 mg/kg/gün)"
+  }));
+  bactrim.addRule(new DoseRule({
+    indication:"pjp_profilaksi", route:"PO", frequency:"günde 2",
+    mg_per_m2_per_day:150, max_mg_per_day:320,
+    notes:"TMP bileşeni: PJP profilaksi (150 mg TMP/m²/gün; genelde 3 ardışık gün/hafta veya günlük şema protokole göre)"
+  }));
+  register(bactrim);
+})();
+
+/* =============================
+   UI LOGIC
+============================= */
+
+const $ = (id)=>document.getElementById(id);
+const outEl = $("output");
+const matchBox = $("matchBox");
+
+function showMatchBox(html){
+  matchBox.style.display = "block";
+  matchBox.innerHTML = html;
+}
+function hideMatchBox(){
+  matchBox.style.display = "none";
+  matchBox.innerHTML = "";
+}
+
+function getPatient(){
+  const w = safeNumber($("weight").value);
+  if(!Number.isFinite(w) || w <= 0) throw new Error("Kilo pozitif olmalı.");
+  const h = safeNumber($("height").value);
+  return { weightKg: w, heightCm: Number.isFinite(h) && h>0 ? h : NaN };
+}
+
+function tryCompute(drug){
+  const pt = getPatient();
+  const needsHeight = drug.rules.some(r => r.needsBsa());
+  if(needsHeight && !Number.isFinite(pt.heightCm)){
+    throw new Error("Bu ilaçta m² üzerinden doz kuralı var. Boy (cm) girmen gerekiyor.");
+  }
+  return renderDrugCalculation(drug, pt);
+}
+
+function pickFromList(drugs){
+  const opts = drugs.map((d, i)=>`<option value="${i}">${d.name}</option>`).join("");
+  showMatchBox(`
+    <div style="margin-bottom:10px;"><b>Birden çok eşleşme bulundu.</b> Seç:</div>
+    <div class="row">
+      <select id="pickSel">${opts}</select>
+      <button id="pickBtn">Seç ve Hesapla</button>
+      <button class="secondary" id="pickCancel" type="button">İptal</button>
+    </div>
+    <div class="small" style="margin-top:8px;">İpucu: Kısaltma yazarsan direkt seçer (örn: vanko, mero, seftri, amoksiklav, klaritro, tige).</div>
+  `);
+
+  $("pickBtn").onclick = ()=>{
+    const idx = Number($("pickSel").value);
+    const d = drugs[idx];
+    hideMatchBox();
+    try{
+      outEl.textContent = tryCompute(d);
+    } catch(e){
+      outEl.textContent = "";
+      showMatchBox(`<b class="bad">Hata:</b> ${e.message}`);
+    }
+  };
+  $("pickCancel").onclick = ()=>{ hideMatchBox(); };
+}
+
+function handleCalc(){
+  outEl.textContent = "";
+  hideMatchBox();
+
+  const q = $("drugQuery").value.trim();
+  if(!q){
+    showMatchBox(`<b class="warn">Uyarı:</b> İlaç adı/kısaltma yaz.`);
+    return;
+  }
+
+  const aliased = resolveAlias(q);
+  if(aliased){
+    try{ outEl.textContent = tryCompute(aliased); }
+    catch(e){ showMatchBox(`<b class="bad">Hata:</b> ${e.message}`); }
+    return;
+  }
+
+  const hits = searchDrugs(q);
+  if(hits.length === 0){
+    const sugg = suggestDrugs(q, 5, 0.55);
+    if(sugg.length){
+      showMatchBox(`<b>Eşleşme bulunamadı.</b><div style="margin-top:6px;">Bunları mı demek istedin?</div>
+        <div class="list" style="margin-top:8px;">
+          ${sugg.map(s=>`<span class="pill">${s}</span>`).join("")}
+        </div>
+      `);
+    } else {
+      showMatchBox(`<b>Eşleşme bulunamadı.</b> <div class="small" style="margin-top:8px;">Kısaltmalar: vanko, mero, fluko, teiko, metro, ami, asik, valgan, bactrim, seftri, amoksiklav, klaritro, tige…</div>`);
+    }
+    return;
+  }
+
+  if(hits.length === 1){
+    try{ outEl.textContent = tryCompute(hits[0]); }
+    catch(e){ showMatchBox(`<b class="bad">Hata:</b> ${e.message}`); }
+    return;
+  }
+
+  pickFromList(hits);
+}
+
+$("btnCalc").addEventListener("click", handleCalc);
+$("drugQuery").addEventListener("keydown", (e)=>{ if(e.key==="Enter") handleCalc(); });
+
+$("btnClear").addEventListener("click", ()=>{
+  $("drugQuery").value = "";
+  outEl.textContent = "";
+  hideMatchBox();
+});
+
+outEl.textContent =
+`Örnek:
+- Kilo: 33
+- İlaç: seftri  / amoksiklav / klaritro / tige
+- Boy: m² gereken ilaçlarda (Asiklovir/Caspofungin gibi) gir.
+Sonra "Hesapla".`;
+</script>
+</body>
+</html>
